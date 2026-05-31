@@ -16,6 +16,7 @@ HTML_TEMPLATE = """
 <html>
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 台灣線上互動測驗系統</title>
     <style>
         body { font-family: "Microsoft JhengHei", Arial, sans-serif; max-width: 900px; margin: 30px auto; padding: 0 20px; line-height: 1.6; color: #333; background-color: #f8f9fa; }
@@ -29,6 +30,7 @@ HTML_TEMPLATE = """
         .btn-generate { background-color: #007bff; color: white; border: none; padding: 12px 24px; font-size: 16px; cursor: pointer; border-radius: 6px; font-weight: bold; width: 100%; margin-top: 10px; }
         .btn-generate:hover { background-color: #0056b3; }
         
+        /* ⏱️ 浮動時間提醒框 (電腦版固定在右上方) */
         .timer-float { position: fixed; top: 20px; right: 20px; background: rgba(0, 0, 0, 0.85); color: #fff; padding: 15px; border-radius: 10px; font-size: 14px; box-shadow: 0 4px 10px rgba(0,0,0,0.2); z-index: 1000; line-height: 1.4; width: 160px; }
         .timer-val { font-size: 18px; font-weight: bold; color: #ffc107; font-family: monospace; }
         
@@ -36,10 +38,12 @@ HTML_TEMPLATE = """
         .q-card { background: #ffffff; border: 1px solid #eaeaea; padding: 20px; margin-bottom: 25px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.02); }
         .q-title { font-weight: bold; font-size: 18px; margin-bottom: 15px; }
         
+        /* 雙欄並排布局 (電腦版一排 2 個選項) */
         .options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
         .option-lbl { background: #fdfdfd; border: 1px solid #e2e8f0; padding: 10px 15px; cursor: pointer; border-radius: 6px; display: flex; align-items: center; gap: 8px; transition: all 0.2s; }
         .option-lbl:hover { background-color: #f1f5f9; border-color: #cbd5e1; }
         
+        /* 計算題後方輸入框 */
         .calc-inline { display: flex; align-items: center; gap: 10px; width: 100%; margin-top: 8px; }
         .calc-input { flex: 1; padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 6px; }
         
@@ -57,6 +61,15 @@ HTML_TEMPLATE = """
         .btn-clear { flex: 1; background-color: #6c757d; color: white; border: none; padding: 15px; font-size: 16px; cursor: pointer; border-radius: 6px; font-weight: bold; }
         .btn-submit:hover { background-color: #218838; }
         .btn-clear:hover { background-color: #5a6268; }
+
+        /* 📱 針對手機小螢幕的自適應完美微調 */
+        @media (max-width: 600px) {
+            .row { flex-direction: column; gap: 0; }
+            .options-grid { grid-template-columns: 1fr; } /* 手機上自動改為一排 1 個選項，防文字擠壓 */
+            .timer-float { position: static; width: 100%; box-sizing: border-box; margin-bottom: 15px; } /* 時間框在手機上置頂，不遮擋視線 */
+            .calc-inline { flex-direction: column; align-items: flex-start; }
+            .calc-input { width: 100%; }
+        }
     </style>
 </head>
 <body>
@@ -69,7 +82,7 @@ HTML_TEMPLATE = """
     <div id="topScoreBoard" style="display:none;"></div>
 
     <div class="setup-box">
-        <h3 style="margin-top:0;">📝 AI 台灣線上互動測驗系統 (型態修正穩定版)</h3>
+        <h3 style="margin-top:0;">📝 AI 台灣線上互動測驗系統 (自適應防卡死版)</h3>
         <form method="POST" action="/generate">
             <div class="row">
                 <div class="col form-group">
@@ -95,7 +108,7 @@ HTML_TEMPLATE = """
 
     {% if questions %}
     <div class="exam-area" id="examArea">
-        <h3>✏️ 線上測驗開始（請直接在下方答題）</h3>
+        <h3>✏️ 線上測驗開始（總共 {{ questions|length }} 題，請直接在下方答題）</h3>
         <form id="quizForm" action="/submit" method="POST">
             {% for q in questions %}
             <div class="q-card">
@@ -224,61 +237,64 @@ def generate_quiz():
     compiled_questions = []
     global_id = 1
 
-    try:
-        for q_type in tasks:
-            type_desc = ""
-            example_structure = ""
-            
-            # 🌟 這裡加上超嚴格鐵律，強迫 AI 根據 q_type 寫入正確的 "type" 欄位
-            if q_type == "tf":
-                type_desc = "1題是非題。正確答案固定填入 '○' 或 '╳'。"
-                example_structure = '{"id": 1, "type": "tf", "question": "題目", "options": [], "answer": "○", "hint": "提示", "analysis": "解析"}'
-            elif q_type == "choice":
-                type_desc = "1題四選一單選題。必須附 A, B, C, D 四個選項，答案填 A/B/C/D。"
-                example_structure = '{"id": 1, "type": "choice", "question": "題目", "options": ["A)選項1", "B)選項2", "C)選項3", "D)選項4"], "answer": "A", "hint": "提示", "analysis": "解析"}'
-            elif q_type == "blank":
-                type_desc = "1題填空題。題目留空處以 ___ 表示。"
-                example_structure = '{"id": 1, "type": "blank", "question": "題目 ___ ", "options": [], "answer": "答案", "hint": "提示", "analysis": "解析"}'
-            else:
-                type_desc = "1題計算題/問答題。題目最後不要留大面積空格。"
-                example_structure = '{"id": 1, "type": "calc", "question": "題目", "options": [], "answer": "參考解答", "hint": "提示", "analysis": "解析"}'
+    for q_type in tasks:
+        type_desc = ""
+        example_structure = ""
+        if q_type == "tf":
+            type_desc = "1題是非題。正確答案固定只能填入 '○' 或 '╳'。"
+            example_structure = '{"id": 1, "type": "tf", "question": "題目", "options": [], "answer": "○", "hint": "提示", "analysis": "解析"}'
+        elif q_type == "choice":
+            type_desc = "1題四選一單選題。必須附 A, B, C, D 四個選項，答案填 A/B/C/D。"
+            example_structure = '{"id": 1, "type": "choice", "question": "題目", "options": ["A)選項1", "B)選項2", "C)選項3", "D)選項4"], "answer": "A", "hint": "提示", "analysis": "解析"}'
+        elif q_type == "blank":
+            type_desc = "1題填空題。題目留空處以 ___ 表示。"
+            example_structure = '{"id": 1, "type": "blank", "question": "題目 ___ ", "options": [], "answer": "答案", "hint": "提示", "analysis": "解析"}'
+        else:
+            type_desc = "1題計算題/問答題。題目最後不要留大面積空格。"
+            example_structure = '{"id": 1, "type": "calc", "question": "題目", "options": [], "answer": "參考解答", "hint": "提示", "analysis": "解析"}'
 
-            json_prompt = (
-                f"針對台灣【{grade}】的【{subject}】科目，請出一份獨一無二的{type_desc}\n"
-                f"【鐵律】：回傳的 JSON 裡面的 \"type\" 欄位數值必須絕對等於 \"{q_type}\"。如果是 calc，\"options\" 欄位必須保持為空陣列 []，絕不可生出選項！\n"
-                f"請『嚴格且只回傳』一個符合以下結構的乾淨 JSON 物件，完全不要 ```json 或多餘文字：\n{example_structure}"
-            )
+        json_prompt = (
+            f"針對台灣【{grade}】的【{subject}】科目，請出一份獨一無二的{type_desc}\n"
+            f"【鐵律】：回傳的 JSON 裡面的 \"type\" 欄位數值必須絕對等於 \"{q_type}\"。\n"
+            f"請『嚴格且只回傳』一個符合以下結構的乾淨 JSON 物件，完全不要 ```json 或多餘文字：\n{example_structure}"
+        )
 
-            completion = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": "你是一個只會回傳單個 JSON 物件的台灣出題大師。請完全用繁體中文。你必須嚴格遵守使用者規定的 \"type\" 題型代碼，絕不可弄混格式。"},
-                    {"role": "user", "content": json_prompt}
-                ],
-                temperature=0.4, max_tokens=1024
-            )
-            
-            raw_res = completion.choices[0].message.content.strip()
-            
-            # 🌟 修正處：更安全的過濾 Markdown 乾淨解法
-            if "```" in raw_res:
-                raw_res = raw_res.split("```")[1]
-                if raw_res.startswith("json"):
-                    raw_res = raw_res[4:]
-            raw_res = raw_res.strip()
+        success = False
+        retry_delay = 4
+        
+        while not success:
+            try:
+                completion = client.chat.completions.create(
+                    model="llama-3.1-8b-instant",
+                    messages=[
+                        {"role": "system", "content": "你是一個只會回傳單個 JSON 物件的台灣出題大師。請完全用繁體中文。格式必須完全嚴格對齊。"},
+                        {"role": "user", "content": json_prompt}
+                    ],
+                    temperature=0.6, max_tokens=1024
+                )
+                raw_res = completion.choices.message.content.strip()
+                
+                if "```" in raw_res:
+                    raw_res = raw_res.split("```")
+                    if raw_res.startswith("json"): raw_res = raw_res[4:]
+                raw_res = raw_res.strip()
 
-            q_obj = json.loads(raw_res)
-            q_obj["id"] = global_id
-            q_obj["type"] = q_type  # 🌟 雙重保險：強制在 Python 後台覆寫回正確的題型型態，徹底杜絕錯位！
-            
-            compiled_questions.append(q_obj)
-            global_id += 1
-            time.sleep(0.1)
+                q_obj = json.loads(raw_res)
+                q_obj["id"] = global_id
+                q_obj["type"] = q_type
+                compiled_questions.append(q_obj)
+                global_id += 1
+                success = True
+                time.sleep(0.15)
+            except Exception as e:
+                if "429" in str(e) or "limit" in str(e).lower():
+                    time.sleep(retry_delay)
+                    retry_delay += 2
+                else:
+                    time.sleep(1)
 
-        cached_questions = compiled_questions
-        return render_template_string(HTML_TEMPLATE, questions=cached_questions, score=None, error=None)
-    except Exception as e:
-        return render_template_string(HTML_TEMPLATE, questions=None, score=None, error=f"AI 出題失敗。原因：{str(e)}")
+    cached_questions = compiled_questions
+    return render_template_string(HTML_TEMPLATE, questions=cached_questions, score=None, error=None)
 
 @app.route('/submit', methods=['POST'])
 def submit_quiz():
