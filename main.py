@@ -50,7 +50,9 @@ def home():
         try:
             # 使用 Groq 平台上對繁體中文及結構理解極佳的 llama3-8b 模型
             completion = client.chat.completions.create(
-                model="llama3-8b-8192",
+                #  新的正確程式碼
+model="llama-3.1-8b-instant",
+
                 messages=[
                     {
                         "role": "system",
