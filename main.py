@@ -1,12 +1,14 @@
 import os
 import json
 from flask import Flask, request, render_template_string
-from groq import Groq
+from google import genai
+from google.genai import types
 
 app = Flask(__name__)
 
-# 初始化 Groq 客戶端（自動讀取 Render 設定的 GROQ_API_KEY）
-client = Groq()
+# 初始化 Google 官方最新 GenAI 客戶端
+# 它會自動讀取你原本就在 Render 後台設定好的 GEMINI_API_KEY 環境變數
+client = genai.Client()
 
 cached_questions = []
 
@@ -28,7 +30,6 @@ HTML_TEMPLATE = """
         .btn-generate { background-color: #007bff; color: white; border: none; padding: 12px 24px; font-size: 16px; cursor: pointer; border-radius: 6px; font-weight: bold; width: 100%; margin-top: 10px; }
         .btn-generate:hover { background-color: #0056b3; }
         
-        /* ⏱️ 浮動時間提醒框樣式 */
         .timer-float { position: fixed; top: 20px; right: 20px; background: rgba(0, 0, 0, 0.85); color: #fff; padding: 15px; border-radius: 10px; font-size: 14px; box-shadow: 0 4px 10px rgba(0,0,0,0.2); z-index: 1000; line-height: 1.4; width: 160px; }
         .timer-val { font-size: 18px; font-weight: bold; color: #ffc107; font-family: monospace; }
         
@@ -36,16 +37,13 @@ HTML_TEMPLATE = """
         .q-card { background: #ffffff; border: 1px solid #eaeaea; padding: 20px; margin-bottom: 25px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.02); }
         .q-title { font-weight: bold; font-size: 18px; margin-bottom: 15px; }
         
-        /* 雙欄並排布局 (一排 2 個選項) */
         .options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
         .option-lbl { background: #fdfdfd; border: 1px solid #e2e8f0; padding: 10px 15px; cursor: pointer; border-radius: 6px; display: flex; align-items: center; gap: 8px; transition: all 0.2s; }
         .option-lbl:hover { background-color: #f1f5f9; border-color: #cbd5e1; }
         
-        /* 計算題後方輸入框 */
         .calc-inline { display: flex; align-items: center; gap: 10px; width: 100%; margin-top: 8px; }
         .calc-input { flex: 1; padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 6px; }
         
-        /* 動態提示按鈕 */
         .btn-hint { background: #17a2b8; color: white; border: none; padding: 5px 12px; font-size: 13px; border-radius: 4px; cursor: pointer; margin-top: 10px; font-weight: bold; }
         .hint-text { background: #e2f4f7; padding: 10px; border-radius: 6px; margin-top: 8px; color: #0f6674; font-size: 14px; display: none; border-left: 4px solid #17a2b8; }
         
@@ -63,18 +61,16 @@ HTML_TEMPLATE = """
     </style>
 </head>
 <body>
-
     <!-- ⏱️ 浮動時間提醒框 -->
     <div class="timer-float" id="timerBox">
         <div>⏱️ 總用時: <span class="timer-val" id="totalTime">00:00</span></div>
         <div style="margin-top: 5px;">⏳ 剩餘時間: <span class="timer-val" id="limitTime">90:00</span></div>
     </div>
 
-    <!-- 頂端分數顯示區 -->
     <div id="topScoreBoard" style="display:none;"></div>
 
     <div class="setup-box">
-        <h3 style="margin-top:0;">📝 AI 台灣線上互動測驗系統</h3>
+        <h3 style="margin-top:0;">📝 AI 台灣線上互動測驗系統 (Gemini 3.5 旗艦加速版)</h3>
         <form method="POST" action="/generate">
             <div class="row">
                 <div class="col form-group">
@@ -83,7 +79,7 @@ HTML_TEMPLATE = """
                 </div>
                 <div class="col form-group">
                     <label>考試科目 / 範圍</label>
-                    <input type="text" name="subject" placeholder="例如：數學（二元一次方程式）" required>
+                    <input type="text" name="subject" placeholder="例如：歷史（荷西時期）" required>
                 </div>
             </div>
             <div class="row">
@@ -104,7 +100,6 @@ HTML_TEMPLATE = """
         <form id="quizForm" action="/submit" method="POST">
             {% for q in questions %}
             <div class="q-card">
-                <!-- 題目文字用藍色 -->
                 <div class="q-title">{{ loop.index }}. 〖{{ "是非題" if q.type == "tf" else "選擇題" if q.type == "choice" else "填空題" if q.type == "blank" else "計算題" }}〗{{ q.question }}</div>
                 
                 {% if q.type == "tf" %}
@@ -113,7 +108,6 @@ HTML_TEMPLATE = """
                         <label class="option-lbl"><input type="radio" name="q_{{ q.id }}" value="╳" onchange="saveProgress('q_{{ q.id }}', '╳')"> ╳ 錯</label>
                     </div>
                 {% elif q.type == "choice" %}
-                    <!-- 選項一排 2 個 (雙欄並排) -->
                     <div class="options-grid">
                         {% for opt in q.options %}
                         <label class="option-lbl"><input type="radio" name="q_{{ q.id }}" value="{{ opt }}" onchange="saveProgress('q_{{ q.id }}', '{{ opt }}')"> {{ opt }}</label>
@@ -122,19 +116,15 @@ HTML_TEMPLATE = """
                 {% elif q.type == "blank" %}
                     <input type="text" name="q_{{ q.id }}" class="txt-input" placeholder="請在此處輸入答案" oninput="saveProgress('q_{{ q.id }}', this.value)">
                 {% else %}
-                    <!-- 計算題：答案框直接在正後方 -->
                     <div class="calc-inline">
                         <span>✍️ 解答輸入位置：</span>
                         <input type="text" name="q_{{ q.id }}" class="calc-input" placeholder="請寫出最終答案或簡述算式" oninput="saveProgress('q_{{ q.id }}', this.value)">
                     </div>
                 {% endif %}
-                
-                <!-- 💡 每道題目最後端的「解題提示」按鈕 -->
                 <button type="button" class="btn-hint" onclick="toggleHint('hint_{{ q.id }}')">💡 顯示/隱藏解題提示</button>
                 <div class="hint-text" id="hint_{{ q.id }}">{{ q.hint }}</div>
             </div>
             {% endfor %}
-            
             <div class="footer-btns">
                 <button type="button" class="btn-submit" onclick="submitAndScore()">💯 填寫完畢 計算得分</button>
                 <button type="button" class="btn-clear" onclick="clearSavedProgress()">🧹 清除歷史作答進度</button>
@@ -145,18 +135,17 @@ HTML_TEMPLATE = """
 
     {% if score is not none %}
     <script>
-        // 後台交卷後，把結果動態灌回頂部
         document.addEventListener("DOMContentLoaded", function() {
             var sb = document.getElementById("topScoreBoard");
             sb.style.display = "block";
             sb.innerHTML = `<div class="score-board"><h2>📊 測驗批改報告</h2><div class="score">${ {{ score }} } / 100 分</div></div><h3>🔍 題目詳細解析：</h3>`;
             window.scrollTo({ top: 0, behavior: 'smooth' });
-            localStorage.clear(); // 真正交卷成功後，清除快取
+            localStorage.clear();
         });
     </script>
     <div class="exam-area" style="margin-top: 20px;">
         {% for r in results %}
-        <div class="report-card {{ 'correct' if r.is_correct else 'wrong' if r.type == 'calc' else 'wrong' }}" style="border-left: 5px solid {% if r.type == 'calc' %}#6c757d{% elif r.is_correct %}#28a745{% else %}#dc3545{% endif %};">
+        <div class="report-card" style="border-left: 5px solid {% if r.type == 'calc' %}#6c757d{% elif r.is_correct %}#28a745{% else %}#dc3545{% endif %};">
             <strong>第 {{ loop.index }} 題：{{ r.question }}</strong><br>
             ✍️ 您的答案：<span style="font-weight:bold;">{{ r.user_ans }}</span><br>
             {% if r.type != 'calc' and not r.is_correct %} ✅ 正確答案：<span style="color: #28a745; font-weight: bold;">{{ r.correct_ans }}</span><br> {% endif %}
@@ -166,13 +155,10 @@ HTML_TEMPLATE = """
     </div>
     {% endif %}
     <script>
-        // 1. 動態切換顯示提示
         function toggleHint(id) {
             var el = document.getElementById(id);
             el.style.display = (el.style.display === 'block') ? 'none' : 'block';
         }
-
-        // 2. localStorage 記憶防斷線技術
         function saveProgress(key, val) { localStorage.setItem(key, val); }
         function loadProgress() {
             if(!document.getElementById("quizForm")) return;
@@ -188,28 +174,18 @@ HTML_TEMPLATE = """
             }
         }
         function clearSavedProgress() { localStorage.clear(); location.reload(); }
+        function submitAndScore() { if(document.getElementById("quizForm")) document.getElementById("quizForm").submit(); }
 
-        // 3. 計算得分按鈕（觸發原表單送出）
-        function submitAndScore() {
-            if(document.getElementById("quizForm")) document.getElementById("quizForm").submit();
-        }
-
-        // ⏱️ 4. 浮動計時器雙系統運作邏輯
-        var totalSec = 0;
-        var limitSec = 90 * 60; // 90分鐘轉換為秒
-        var alertTriggered = false;
-
+        var totalSec = 0; var limitSec = 90 * 60; var alertTriggered = false;
         function updateTimers() {
             totalSec++;
             if (!alertTriggered) {
                 limitSec--;
                 if (limitSec <= 0) {
-                    limitSec = 0;
-                    alertTriggered = true;
-                    alert("90分鐘以到你是大笨蛋"); // 超時彈窗，點擊取消後還能繼續
+                    limitSec = 0; alertTriggered = true;
+                    alert("90分鐘以到你是大笨蛋");
                 }
             }
-            // 轉換為 MM:SS 格式
             document.getElementById("totalTime").innerText = formatTime(totalSec);
             document.getElementById("limitTime").innerText = formatTime(limitSec);
         }
@@ -217,11 +193,7 @@ HTML_TEMPLATE = """
             var m = Math.floor(s / 60); var sec = s % 60;
             return (m < 10 ? "0"+m : m) + ":" + (sec < 10 ? "0"+sec : sec);
         }
-
-        if(document.getElementById("examArea")) {
-            loadProgress();
-            setInterval(updateTimers, 1000);
-        }
+        if(document.getElementById("examArea")) { loadProgress(); setInterval(updateTimers, 1000); }
     </script>
 </body>
 </html>
@@ -236,8 +208,6 @@ def generate_quiz():
     global cached_questions
     grade = request.form.get('grade', '').strip()
     subject = request.form.get('subject', '').strip()
-    
-    # 嚴格讀取題型數量
     num_tf = int(request.form.get('num_tf', 0)) if request.form.get('num_tf') else 0
     num_choice = int(request.form.get('num_choice', 0)) if request.form.get('num_choice') else 0
     num_blank = int(request.form.get('num_blank', 0)) if request.form.get('num_blank') else 0
@@ -246,39 +216,41 @@ def generate_quiz():
     if num_tf == 0 and num_choice == 0 and num_blank == 0 and num_calc == 0:
         return render_template_string(HTML_TEMPLATE, questions=None, score=None, error="錯誤：請至少填寫一種題型的數量！")
 
-    # 確保 AI 嚴格按照「是非題、選擇題、填空題、計算題」的順序產出 JSON 陣列
+    reqs = []
+    if num_tf > 0: reqs.append(f"- 是非題：共 {num_tf} 題 (正確答案固定填入 '○' 或 '╳')")
+    if num_choice > 0: reqs.append(f"- 選擇題：共 {num_choice} 題 (每題須附 A,B,C,D 四個選項，答案填 A/B/C/D)")
+    if num_blank > 0: reqs.append(f"- 填空題：共 {num_blank} 題 (題目留空以 ___ 表示)")
+    if num_calc > 0: reqs.append(f"- 計算題：共 {num_calc} 題")
+    reqs_str = "\n".join(reqs)
+
     json_format_prompt = (
         f"你是一位台灣教師。請針對台灣【{grade}】的【{subject}】科目出題。\n"
-        f"考卷中必須『嚴格按照以下順序』依序產生對應題型，若數量為0請直接跳過：\n"
-        f"1. 是非題：共 {num_tf} 題 (正確答案固定填入 '○' 或 '╳')\n"
-        f"2. 選擇題：共 {num_choice} 題 (每題須附 A,B,C,D 四個選項，答案填 A/B/C/D)\n"
-        f"3. 填空題：共 {num_blank} 題 (題目留空以 ___ 表示)\n"
-        f"4. 計算題：共 {num_calc} 題 (題目最後不要留大面積空格)\n\n"
-        "請『嚴格且只回傳』一個乾淨的 JSON 陣列字串，格式如下，『analysis』和『hint』請保持在 15 字以內防止斷線：\n"
+        f"考卷中必須『嚴格按照以下順序』依序產生對應題型，若數量為0請直接跳過：\n{reqs_str}\n\n"
+        "請『嚴格且只回傳』一個乾淨的 JSON 陣列字串，格式如下：\n"
         "[\n"
         "  {\n"
         "    \"id\": 1,\n"
         "    \"type\": \"tf\",\n"
-        "    \"question\": \"是非題題目內容\",\n"
+        "    \"question\": \"題目內容(台灣繁體)\",\n"
         "    \"options\": [],\n"
         "    \"answer\": \"○\",\n"
-        "    \"hint\": \"這題的解題提示\",\n"
-        "    \"analysis\": \"答案解析\"\n"
+        "    \"hint\": \"這題的繁體中文解題提示\",\n"
+        "    \"analysis\": \"台灣繁體答案詳細解析\"\n"
         "  }\n"
         "]"
     )
 
     try:
-        completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": "你是一個只會回傳乾淨 JSON 陣列的台灣出題系統。完全使用繁體中文。請嚴格遵守題目指定的題型先後順序產出資料。"},
-                {"role": "user", "content": json_format_prompt}
-            ],
-            temperature=0.3, max_tokens=4096 
+        # 🚀 正式切換至 2026 最新旗艦級 gemini-3.5-flash 模型！
+        response = client.models.generate_content(
+            model='gemini-3.5-flash',
+            contents=json_format_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction="你是一個只會回傳乾淨 JSON 陣列的台灣出題系統。完全使用繁體中文。請嚴格遵守指定題型的先後順序產出資料。",
+                response_mime_type="application/json"  # 確保強制輸出 JSON
+            ),
         )
-        raw_json = completion.choices[0].message.content.strip()
-        cached_questions = json.loads(raw_json)
+        cached_questions = json.loads(response.text.strip())
         return render_template_string(HTML_TEMPLATE, questions=cached_questions, score=None, error=None)
     except Exception as e:
         return render_template_string(HTML_TEMPLATE, questions=None, score=None, error=f"AI 出題失敗。原因：{str(e)}")
@@ -287,7 +259,7 @@ def generate_quiz():
 def submit_quiz():
     global cached_questions
     if not cached_questions:
-        return render_template_string(HTML_TEMPLATE, questions=None, score=None, error="測驗已過期，請重新設定出題。")
+        return render_template_string(HTML_TEMPLATE, questions=None, score=None, error="測驗已過期，請重新出題。")
 
     results = []
     correct_count = 0
