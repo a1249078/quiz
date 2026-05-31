@@ -1,14 +1,12 @@
 import os
 import json
 from flask import Flask, request, render_template_string
-from google import genai
-from google.genai import types
+from groq import Groq
 
 app = Flask(__name__)
 
-# 初始化 Google 官方最新 GenAI 客戶端
-# 它會自動讀取你原本就在 Render 後台設定好的 GEMINI_API_KEY 環境變數
-client = genai.Client()
+# 初始化正確的 Groq 客戶端（會自動去讀取你在 Render 綁定的 GROQ_API_KEY）
+client = Groq()
 
 cached_questions = []
 
@@ -70,7 +68,7 @@ HTML_TEMPLATE = """
     <div id="topScoreBoard" style="display:none;"></div>
 
     <div class="setup-box">
-        <h3 style="margin-top:0;">📝 AI 台灣線上互動測驗系統 (Gemini 3.5 旗艦加速版)</h3>
+        <h3 style="margin-top:0;">📝 AI 台灣線上互動測驗系統 (Groq 旗艦加速版)</h3>
         <form method="POST" action="/generate">
             <div class="row">
                 <div class="col form-group">
@@ -226,7 +224,7 @@ def generate_quiz():
     json_format_prompt = (
         f"你是一位台灣教師。請針對台灣【{grade}】的【{subject}】科目出題。\n"
         f"考卷中必須『嚴格按照以下順序』依序產生對應題型，若數量為0請直接跳過：\n{reqs_str}\n\n"
-        "請『嚴格且只回傳』一個乾淨的 JSON 陣列字串，格式如下：\n"
+        "請『嚴格且只回傳』一個符合以下結構的 JSON 陣列字串，格式必須完全正確。請記得關閉所有 JSON 括號：\n"
         "[\n"
         "  {\n"
         "    \"id\": 1,\n"
@@ -234,23 +232,31 @@ def generate_quiz():
         "    \"question\": \"題目內容(台灣繁體)\",\n"
         "    \"options\": [],\n"
         "    \"answer\": \"○\",\n"
-        "    \"hint\": \"這題的繁體中文解題提示\",\n"
-        "    \"analysis\": \"台灣繁體答案詳細解析\"\n"
+        "    \"hint\": \"精簡提示\",\n"
+        "    \"analysis\": \"精簡解析\"\n"
         "  }\n"
         "]"
     )
 
     try:
-        # 🚀 正式切換至 2026 最新旗艦級 gemini-3.5-flash 模型！
-        response = client.models.generate_content(
-            model='gemini-3.5-flash',
-            contents=json_format_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction="你是一個只會回傳乾淨 JSON 陣列的台灣出題系統。完全使用繁體中文。請嚴格遵守指定題型的先後順序產出資料。",
-                response_mime_type="application/json"  # 確保強制輸出 JSON
-            ),
+        # 正確調用你在 Render 後台設定的 Groq 系統，並拉大 max_tokens
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system", 
+                    "content": (
+                        "你是一個只會回傳乾淨 JSON 陣列的台灣出題系統。完全使用繁體中文。請遵守題型順序。\n"
+                        "為了防止大題量字數超出中斷，請將『hint』和『analysis』這兩個欄位簡化，每一個字串請嚴格壓縮在 10 個字以內！"
+                    )
+                },
+                {"role": "user", "content": json_format_prompt}
+            ],
+            temperature=0.2,
+            max_tokens=4096  # 開到最大防止字數中斷
         )
-        cached_questions = json.loads(response.text.strip())
+        raw_json = completion.choices[0].message.content.strip()
+        cached_questions = json.loads(raw_json)
         return render_template_string(HTML_TEMPLATE, questions=cached_questions, score=None, error=None)
     except Exception as e:
         return render_template_string(HTML_TEMPLATE, questions=None, score=None, error=f"AI 出題失敗。原因：{str(e)}")
