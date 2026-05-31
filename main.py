@@ -5,7 +5,7 @@ from groq import Groq
 
 app = Flask(__name__)
 
-# 初始化 Groq 客戶端
+# 初始化 Groq 客戶端（會自動讀取你在 Render 設定的 GROQ_API_KEY）
 client = Groq()
 
 cached_questions = []
@@ -44,7 +44,6 @@ HTML_TEMPLATE = """
     </style>
 </head>
 <body>
-
     <div class="setup-box">
         <h3 style="margin-top:0;">📝 AI 台灣學生考卷設定 (大題量優化版)</h3>
         <form method="POST" action="/generate">
@@ -75,23 +74,19 @@ HTML_TEMPLATE = """
             <button type="submit" class="btn-generate">🚀 立即在下方生成大量考卷</button>
         </form>
     </div>
-    {% if error %}
-        <p class="error">{{ error }}</p>
-    {% endif %}
+
+    {% if error %} <p class="error">{{ error }}</p> {% endif %}
 
     {% if questions %}
     <div class="exam-area">
-        <h3 style="margin-top:0; border-bottom: 2px solid #007bff; padding-bottom: 8px;">✏️ 線上測驗開始（總共 {{ questions|length }} 題，請在下方答題）</h3>
+        <h3 style="margin-top:0; border-bottom: 2px solid #007bff; padding-bottom: 8px;">✏️ 線上測驗開始（總共 {{ questions|length }} 題）</h3>
         <form action="/submit" method="POST">
             {% for q in questions %}
             <div class="q-card">
-                <div class="q-title">{{ loop.index }}. 〖{{ "選擇題" if q.type == "choice" else "填充題" if q.type == "blank" else "計算/問答題" }}〗{{ q.question }}</div>
-                
+                <div class="q-title">{{ loop.index }}. 〖{{ "選擇題" if q.type == "choice" else "填充題" if q.type == "blank" else "計算題" }}〗{{ q.question }}</div>
                 {% if q.type == "choice" %}
                     {% for opt in q.options %}
-                    <label class="option-lbl">
-                        <input type="radio" name="q_{{ q.id }}" value="{{ opt }}" required> {{ opt }}
-                    </label>
+                    <label class="option-lbl"><input type="radio" name="q_{{ q.id }}" value="{{ opt }}" required> {{ opt }}</label>
                     {% endfor %}
                 {% elif q.type == "blank" %}
                     <input type="text" name="q_{{ q.id }}" class="txt-input" placeholder="請在此處輸入答案" required>
@@ -109,17 +104,14 @@ HTML_TEMPLATE = """
     <div class="exam-area" style="margin-top: 20px;">
         <div class="score-board">
             <h2>📊 測驗批改報告</h2>
-            <div>得分</div>
             <div class="score">{{ score }} / 100 分</div>
         </div>
         <h3>🔍 題目解析與對錯：</h3>
         {% for r in results %}
-        <div class="report-card {{ 'correct' if r.is_correct else 'wrong' if r.type != 'calc' else '' }}" style="border-left: 5px solid {% if r.type == 'calc' %}#6c757d{% elif r.is_correct %}#28a745{% else %}#dc3545{% endif %};">
+        <div class="report-card" style="border-left: 5px solid {% if r.type == 'calc' %}#6c757d{% elif r.is_correct %}#28a745{% else %}#dc3545{% endif %};">
             <strong>第 {{ loop.index }} 題：{{ r.question }}</strong><br>
-            ✍️ 您的答案：<span style="font-weight: bold;">{{ r.user_ans }}</span><br>
-            {% if r.type != 'calc' and not r.is_correct %}
-                ✅ 正確答案：<span style="color: #28a745; font-weight: bold;">{{ r.correct_ans }}</span><br>
-            {% endif %}
+            ✍️ 您的答案：<span>{{ r.user_ans }}</span><br>
+            {% if r.type != 'calc' and not r.is_correct %} ✅ 正確答案：<span style="color: #28a745; font-weight: bold;">{{ r.correct_ans }}</span><br> {% endif %}
             <div class="analysis">💡 <b>解析：</b>{{ r.analysis }}</div>
         </div>
         {% endfor %}
@@ -132,19 +124,14 @@ HTML_TEMPLATE = """
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE, questions=None, score=None, error=None)
-
 @app.route('/generate', methods=['POST'])
 def generate_quiz():
     global cached_questions
     grade = request.form.get('grade', '').strip()
     subject = request.form.get('subject', '').strip()
-    num_choice = request.form.get('num_choice', '').strip()
-    num_blank = request.form.get('num_blank', '').strip()
-    num_calc = request.form.get('num_calc', '').strip()
-
-    num_choice = int(num_choice) if num_choice and int(num_choice) > 0 else 0
-    num_blank = int(num_blank) if num_blank and int(num_blank) > 0 else 0
-    num_calc = int(num_calc) if num_calc and int(num_calc) > 0 else 0
+    num_choice = int(request.form.get('num_choice', 0)) if request.form.get('num_choice') else 0
+    num_blank = int(request.form.get('num_blank', 0)) if request.form.get('num_blank') else 0
+    num_calc = int(request.form.get('num_calc', 0)) if request.form.get('num_calc') else 0
 
     if num_choice == 0 and num_blank == 0 and num_calc == 0:
         return render_template_string(HTML_TEMPLATE, questions=None, score=None, error="錯誤：請至少填寫一種題型的數量！")
@@ -154,10 +141,11 @@ def generate_quiz():
     if num_blank > 0: reqs.append(f"- 填充題：共 {num_blank} 題 (留空處以 ___ 表示)")
     if num_calc > 0: reqs.append(f"- 計算題/問答題：共 {num_calc} 題")
     reqs_str = "\n".join(reqs)
+
     json_format_prompt = (
-        f"你是一位台灣的教師。請針對台灣【{grade}】的【{subject}】科目出題。\n"
+        f"你是一位台灣教師。請針對台灣【{grade}】的【{subject}】科目出題。\n"
         f"考卷中必須包含且只能包含以下題型及數量，其餘沒提到的題型請完全跳過：\n{reqs_str}\n"
-        "請『嚴格且只回傳』一個符合以下結構的 JSON 陣列字串，不要包含任何 ```json 或額外聊天文字：\n"
+        "請『嚴格且只回傳』一個符合以下結構的 JSON 陣列字串，不要包含任何 ```json 或額外文字：\n"
         "[\n"
         "  {\n"
         "    \"id\": 1,\n"
@@ -165,7 +153,7 @@ def generate_quiz():
         "    \"question\": \"題目(台灣繁體)\",\n"
         "    \"options\": [\"A) 選項1\", \"B) 選項2\", \"C) 選項3\", \"D) 選項4\"],\n"
         "    \"answer\": \"A\",\n"
-        "    \"analysis\": \"極簡短解析一文即可\"\n"
+        "    \"analysis\": \"極簡短解析\"\n"
         "  }\n"
         "]"
     )
@@ -176,18 +164,15 @@ def generate_quiz():
             messages=[
                 {
                     "role": "system", 
-                    "content": (
-                        "你是一個只會回傳乾淨 JSON 陣列的台灣出題系統。絕對不要說任何非 JSON 的廢話。\n"
-                        "出題規則：1. 完全使用繁體中文。 2. 考卷結構大標題分明。 "
-                        "3. 為了節省空間確保大量出題不中斷，『analysis』解析欄位請嚴格控制在 15 個字以內！"
-                    )
+                    "content": "你是一個只會回傳乾淨 JSON 陣列的台灣出題系統。完全使用繁體中文。為了防止大題量中斷，『analysis』解析請控制在 15 字內！"
                 },
                 {"role": "user", "content": json_format_prompt}
             ],
             temperature=0.3,
             max_tokens=4096 
         )
-        raw_json = completion.choices.message.content.strip()
+        # 精準核對：使用 [0] 指向正確的 Choice 物件
+        raw_json = completion.choices[0].message.content.strip()
         cached_questions = json.loads(raw_json)
         return render_template_string(HTML_TEMPLATE, questions=cached_questions, score=None, error=None)
     except Exception as e:
