@@ -48,11 +48,9 @@ def home():
     if request.method == 'POST':
         user_input = request.form.get('subject')
         try:
-            # 使用 Groq 平台上對繁體中文及結構理解極佳的 llama3-8b 模型
+            # 呼叫 Groq 最新世代 8B 瞬時模型
             completion = client.chat.completions.create(
-                #  新的正確程式碼
-model="llama-3.1-8b-instant",
-
+                model="llama-3.1-8b-instant",
                 messages=[
                     {
                         "role": "system",
@@ -71,7 +69,8 @@ model="llama-3.1-8b-instant",
                     }
                 ]
             )
-            exam_content = completion.choices.message.content
+            # 修正處：增加 [0] 成功解析回傳列表
+            exam_content = completion.choices[0].message.content
         except Exception as e:
             exam_content = f"系統出錯，錯誤訊息：{str(e)}"
             
