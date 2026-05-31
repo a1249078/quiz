@@ -1,11 +1,12 @@
 import os
 import json
+import time
 from flask import Flask, request, render_template_string
 from groq import Groq
 
 app = Flask(__name__)
 
-# 初始化正確的 Groq 客戶端（會自動去讀取你在 Render 綁定的 GROQ_API_KEY）
+# 初始化正確的 Groq 客戶端（自動讀取你在 Render 綁定的 GROQ_API_KEY）
 client = Groq()
 
 cached_questions = []
@@ -68,7 +69,7 @@ HTML_TEMPLATE = """
     <div id="topScoreBoard" style="display:none;"></div>
 
     <div class="setup-box">
-        <h3 style="margin-top:0;">📝 AI 台灣線上互動測驗系統 (Groq 旗艦加速版)</h3>
+        <h3 style="margin-top:0;">📝 AI 台灣線上互動測驗系統 (型態修正穩定版)</h3>
         <form method="POST" action="/generate">
             <div class="row">
                 <div class="col form-group">
@@ -94,7 +95,7 @@ HTML_TEMPLATE = """
 
     {% if questions %}
     <div class="exam-area" id="examArea">
-        <h3>✏️ 線上測驗開始（請直接在下方答題，進度將自動保存）</h3>
+        <h3>✏️ 線上測驗開始（請直接在下方答題）</h3>
         <form id="quizForm" action="/submit" method="POST">
             {% for q in questions %}
             <div class="q-card">
@@ -214,49 +215,67 @@ def generate_quiz():
     if num_tf == 0 and num_choice == 0 and num_blank == 0 and num_calc == 0:
         return render_template_string(HTML_TEMPLATE, questions=None, score=None, error="錯誤：請至少填寫一種題型的數量！")
 
-    reqs = []
-    if num_tf > 0: reqs.append(f"- 是非題：共 {num_tf} 題 (正確答案固定填入 '○' 或 '╳')")
-    if num_choice > 0: reqs.append(f"- 選擇題：共 {num_choice} 題 (每題須附 A,B,C,D 四個選項，答案填 A/B/C/D)")
-    if num_blank > 0: reqs.append(f"- 填空題：共 {num_blank} 題 (題目留空以 ___ 表示)")
-    if num_calc > 0: reqs.append(f"- 計算題：共 {num_calc} 題")
-    reqs_str = "\n".join(reqs)
+    tasks = []
+    for _ in range(num_tf): tasks.append("tf")
+    for _ in range(num_choice): tasks.append("choice")
+    for _ in range(num_blank): tasks.append("blank")
+    for _ in range(num_calc): tasks.append("calc")
 
-    json_format_prompt = (
-        f"你是一位台灣教師。請針對台灣【{grade}】的【{subject}】科目出題。\n"
-        f"考卷中必須『嚴格按照以下順序』依序產生對應題型，若數量為0請直接跳過：\n{reqs_str}\n\n"
-        "請『嚴格且只回傳』一個符合以下結構的 JSON 陣列字串，格式必須完全正確。請記得關閉所有 JSON 括號：\n"
-        "[\n"
-        "  {\n"
-        "    \"id\": 1,\n"
-        "    \"type\": \"tf\",\n"
-        "    \"question\": \"題目內容(台灣繁體)\",\n"
-        "    \"options\": [],\n"
-        "    \"answer\": \"○\",\n"
-        "    \"hint\": \"精簡提示\",\n"
-        "    \"analysis\": \"精簡解析\"\n"
-        "  }\n"
-        "]"
-    )
+    compiled_questions = []
+    global_id = 1
 
     try:
-        # 正確調用你在 Render 後台設定的 Groq 系統，並拉大 max_tokens
-        completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {
-                    "role": "system", 
-                    "content": (
-                        "你是一個只會回傳乾淨 JSON 陣列的台灣出題系統。完全使用繁體中文。請遵守題型順序。\n"
-                        "為了防止大題量字數超出中斷，請將『hint』和『analysis』這兩個欄位簡化，每一個字串請嚴格壓縮在 10 個字以內！"
-                    )
-                },
-                {"role": "user", "content": json_format_prompt}
-            ],
-            temperature=0.2,
-            max_tokens=4096  # 開到最大防止字數中斷
-        )
-        raw_json = completion.choices[0].message.content.strip()
-        cached_questions = json.loads(raw_json)
+        for q_type in tasks:
+            type_desc = ""
+            example_structure = ""
+            
+            # 🌟 這裡加上超嚴格鐵律，強迫 AI 根據 q_type 寫入正確的 "type" 欄位
+            if q_type == "tf":
+                type_desc = "1題是非題。正確答案固定填入 '○' 或 '╳'。"
+                example_structure = '{"id": 1, "type": "tf", "question": "題目", "options": [], "answer": "○", "hint": "提示", "analysis": "解析"}'
+            elif q_type == "choice":
+                type_desc = "1題四選一單選題。必須附 A, B, C, D 四個選項，答案填 A/B/C/D。"
+                example_structure = '{"id": 1, "type": "choice", "question": "題目", "options": ["A)選項1", "B)選項2", "C)選項3", "D)選項4"], "answer": "A", "hint": "提示", "analysis": "解析"}'
+            elif q_type == "blank":
+                type_desc = "1題填空題。題目留空處以 ___ 表示。"
+                example_structure = '{"id": 1, "type": "blank", "question": "題目 ___ ", "options": [], "answer": "答案", "hint": "提示", "analysis": "解析"}'
+            else:
+                type_desc = "1題計算題/問答題。題目最後不要留大面積空格。"
+                example_structure = '{"id": 1, "type": "calc", "question": "題目", "options": [], "answer": "參考解答", "hint": "提示", "analysis": "解析"}'
+
+            json_prompt = (
+                f"針對台灣【{grade}】的【{subject}】科目，請出一份獨一無二的{type_desc}\n"
+                f"【鐵律】：回傳的 JSON 裡面的 \"type\" 欄位數值必須絕對等於 \"{q_type}\"。如果是 calc，\"options\" 欄位必須保持為空陣列 []，絕不可生出選項！\n"
+                f"請『嚴格且只回傳』一個符合以下結構的乾淨 JSON 物件，完全不要 ```json 或多餘文字：\n{example_structure}"
+            )
+
+            completion = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": "你是一個只會回傳單個 JSON 物件的台灣出題大師。請完全用繁體中文。你必須嚴格遵守使用者規定的 \"type\" 題型代碼，絕不可弄混格式。"},
+                    {"role": "user", "content": json_prompt}
+                ],
+                temperature=0.4, max_tokens=1024
+            )
+            
+            raw_res = completion.choices[0].message.content.strip()
+            
+            # 🌟 修正處：更安全的過濾 Markdown 乾淨解法
+            if "```" in raw_res:
+                raw_res = raw_res.split("```")[1]
+                if raw_res.startswith("json"):
+                    raw_res = raw_res[4:]
+            raw_res = raw_res.strip()
+
+            q_obj = json.loads(raw_res)
+            q_obj["id"] = global_id
+            q_obj["type"] = q_type  # 🌟 雙重保險：強制在 Python 後台覆寫回正確的題型型態，徹底杜絕錯位！
+            
+            compiled_questions.append(q_obj)
+            global_id += 1
+            time.sleep(0.1)
+
+        cached_questions = compiled_questions
         return render_template_string(HTML_TEMPLATE, questions=cached_questions, score=None, error=None)
     except Exception as e:
         return render_template_string(HTML_TEMPLATE, questions=None, score=None, error=f"AI 出題失敗。原因：{str(e)}")
